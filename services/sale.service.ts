@@ -1,10 +1,11 @@
 import { createSaleDTO, getSaleDTO } from "@sale/zod";
-import { PrismaClient, Sale } from "@/generated/prisma";
+import { Sale } from "@/generated/prisma";
 import { PaginatedServiceResponse, ServiceResponseType } from "@/types/service.type";
+import { prisma } from "@/lib/prisma";
+import { ClientSale } from "@sale/types";
+import { converSaleItemForClient } from "@sale/utils";
 
-const prisma = new PrismaClient();
-
-export const getSales = async (params: getSaleDTO): Promise<PaginatedServiceResponse<Sale[]>> => {
+export const getSales = async (params: getSaleDTO): Promise<PaginatedServiceResponse<ClientSale[]>> => {
     try {
         const whereClause: any = {};
 
@@ -35,7 +36,13 @@ export const getSales = async (params: getSaleDTO): Promise<PaginatedServiceResp
             success: true,
             message: "Sales fetched successfully",
             data: {
-                result: sales,
+                result: sales.map(s => {
+                    return {
+                        ...s,
+                        total: String(s.total),
+                        saleItems: s.saleItems.map(converSaleItemForClient)
+                    }
+                }),
                 total,
                 page: params.page,
                 totalPages: Math.ceil(total / params.page)
@@ -50,33 +57,54 @@ export const getSales = async (params: getSaleDTO): Promise<PaginatedServiceResp
     }
 }
 
-export const createSale = async (payload: createSaleDTO): Promise<ServiceResponseType<Sale>> => {
+export const createSale = async (payload: createSaleDTO): Promise<ServiceResponseType<ClientSale>> => {
     try {
         const { date, saleItems } = payload;
 
         const total = saleItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
 
-        const sale = await prisma.sale.create({
-            data: {
-                date: new Date(date),
-                saleItems: {
-                    create: saleItems.map(item => ({
-                        itemId: item.itemId,
-                        quantity: item.quantity,
-                        price: item.price
-                    }))
-                },
-                total
-            },
-            include: {
-                saleItems: true
+        const sale = await prisma.$transaction(async (tx) => {
+            for (const saleItem of saleItems) {
+                await tx.item.update({
+                  where: { id: saleItem.itemId },
+                  data: { stockQuantity: {
+                    increment: -saleItem.quantity
+                  }},
+                });
             }
+
+            const sale = await tx.sale.create({
+                data: {
+                    date: new Date(date),
+                    saleItems: {
+                        create: saleItems.map(item => ({
+                            itemId: item.itemId,
+                            quantity: item.quantity,
+                            price: item.price
+                        }))
+                    },
+                    total
+                },
+                include: {
+                    saleItems: true
+                }
+            }); 
+
+            return sale;
         });
+
+        const serialize: ClientSale = {
+            ...sale,
+            total: sale.total.toString(),
+            saleItems: sale.saleItems.map(s => {
+                return converSaleItemForClient(s);
+            })
+        };
 
         return {
             success: true,
             message: "Sale created successfully",
-            data: sale
+            data: serialize
         }
     } catch (error) {   
         return {
@@ -87,14 +115,16 @@ export const createSale = async (payload: createSaleDTO): Promise<ServiceRespons
     }
 }
 
-export const getSaleById = async (id: number): Promise<ServiceResponseType<Sale>> => {
+export const getSaleById = async (id: number): Promise<ServiceResponseType<ClientSale>> => {
     try {
         const sale = await prisma.sale.findUnique({
-            where: {
-                id
-            },
+            where: { id },
             include: {
-                saleItems: true
+                saleItems: {
+                    include: {
+                        item: true
+                    }
+                }
             }
         });
 
@@ -106,10 +136,18 @@ export const getSaleById = async (id: number): Promise<ServiceResponseType<Sale>
             };
         }
 
+        const serialize: ClientSale = {
+            ...sale,
+            total: sale.total.toString(),
+            saleItems: sale.saleItems.map(s => {
+                return converSaleItemForClient(s);
+            })
+        };
+
         return {
             success: true,
             message: "Sale fetched successfully",
-            data: sale
+            data: serialize
         }
     } catch (error) {
         return {
@@ -119,21 +157,51 @@ export const getSaleById = async (id: number): Promise<ServiceResponseType<Sale>
         };
     }
 }
-export const deleteSale = async (id: number): Promise<ServiceResponseType<Sale>> => {
+export const deleteSale = async (id: number): Promise<ServiceResponseType<ClientSale>> => {
     try {
-        const sale = await prisma.sale.delete({
-            where: {
-                id
-            },
-            include: {
-                saleItems: true
+        const sale = await prisma.$transaction(async (tx) => {
+            // 1. Get existing sale items
+            const existingItems = await tx.saleItem.findMany({
+                where: { saleId: id }
+            });
+
+            // 2. Re-add their quantities back to stock
+            for (const item of existingItems) {
+                await tx.item.update({
+                    where: { id: item.itemId },
+                    data: {
+                        stockQuantity: {
+                            increment: item.quantity,
+                        }
+                    }
+                });
             }
+
+            // 3. Delete
+            const sale = await prisma.sale.delete({
+                where: {
+                    id
+                },
+                include: {
+                    saleItems: true
+                }
+            });
+
+            return sale;
         });
+
+        const serialize: ClientSale = {
+            ...sale,
+            total: sale.total.toString(),
+            saleItems: sale.saleItems.map(s => {
+                return converSaleItemForClient(s);
+            })
+        };
 
         return {
             success: true,
             message: "Sale deleted successfully",
-            data: sale
+            data: serialize
         }
     } catch (error) {
         return {
@@ -144,39 +212,83 @@ export const deleteSale = async (id: number): Promise<ServiceResponseType<Sale>>
     }
 }
 
-export const updateSale = async (id: number, payload: createSaleDTO): Promise<ServiceResponseType<Sale>> => {
+export const updateSale = async (id: number, payload: createSaleDTO): Promise<ServiceResponseType<ClientSale>> => {
     try {
         const { date, saleItems } = payload;
 
         const total = saleItems.reduce((acc, item) => acc + (item.price * item.quantity), 0);
 
-        const sale = await prisma.sale.update({
-            where: {
-                id
-            },
-            data: {
-                date: new Date(date),
-                saleItems: {
-                    deleteMany: {
-                        itemId: { notIn: saleItems.map(item => item.itemId) }
-                    },
-                    create: saleItems.map(item => ({
-                        itemId: item.itemId,
-                        quantity: item.quantity,
-                        price: item.price
-                    }))
-                },
-                total
-            },
-            include: {
-                saleItems: true
+        const sale = await prisma.$transaction(async (tx) => {
+            // 1. Get existing sale items
+            const existingItems = await tx.saleItem.findMany({
+                where: { saleId: id }
+            });
+
+            // 2. Re-add their quantities back to stock
+            for (const item of existingItems) {
+                await tx.item.update({
+                    where: { id: item.itemId },
+                    data: {
+                        stockQuantity: {
+                            increment: item.quantity,
+                        }
+                    }
+                });
             }
+
+            // 3. Delete old sale items
+            await tx.saleItem.deleteMany({
+                where: { saleId: id },
+            });
+
+            // 4. Subtract new saleItems stock
+            for (const item of saleItems) {
+                await tx.item.update({
+                    where: { id: item.itemId },
+                    data: {
+                        stockQuantity: {
+                        increment: -item.quantity, // subtract
+                        },
+                    },
+                });
+            }
+
+            // 5. Re-create sale and sale items
+            const sale = await tx.sale.update({
+                where: {
+                    id
+                },
+                data: {
+                    date: new Date(date),
+                    saleItems: {
+                        create: saleItems.map(item => ({
+                            itemId: item.itemId,
+                            quantity: item.quantity,
+                            price: item.price
+                        }))
+                    },
+                    total
+                },
+                include: {
+                    saleItems: true
+                }
+            });
+
+            return sale;
         });
+
+        const serialize: ClientSale = {
+            ...sale,
+            total: sale.total.toString(),
+            saleItems: sale.saleItems.map(s => {
+                return converSaleItemForClient(s);
+            })
+        };
 
         return {
             success: true,
             message: "Sale updated successfully",
-            data: sale
+            data: serialize
         }
     } catch (error) {
         return {

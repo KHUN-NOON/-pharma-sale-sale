@@ -10,8 +10,12 @@ export const getSaleSchema = z.object({
 export type getSaleDTO = z.infer<typeof getSaleSchema>;
 
 export const createSaleSchema = z.object({
-    date: z.string().refine((val) => !isNaN(Date.parse(val))),
+    date: z.string().datetime({
+        message: "Invalid ISO 8601 date format",
+        offset: false // requires timezone offset (Z or +hh:mm)
+    }),
     saleItems: z.array(z.object({
+        name: z.string().optional(),
         itemId: z.number(),
         quantity: z.number().min(1).int(),
         price: z.number().min(0)
