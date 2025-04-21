@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableFooter, TableHeader, TableRow } from 
 import { Button } from "@/components/ui/button";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { createSaleSchema } from "@sale/zod";
-import { useActionState, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ClientItem } from '@/modules/pharmacy/types/index';
 import { debounce } from 'throttle-debounce';
 import { getItemSelectAction } from "@/modules/pharmacy/actions/item.action";
@@ -20,7 +20,6 @@ import { Trash2 } from "lucide-react";
 import { dismissableToaster } from "@/lib/toaster";
 import { createSaleAction } from "@sale/actions/sale.action";
 import { ClientSale } from "@sale/types";
-import FullScreenLoading from "@/components/ui/fullscreen-loading";
 import FullscreenLoading from "@/components/ui/fullscreen-loading";
 import ConfirmDeleteDialog from "@/components/ui/confirm-delete-dialog";
 import { useRouter } from "next/navigation";
@@ -57,13 +56,14 @@ const SaleForm = () => {
             if (res.success) {
                 setSearchItems(res.data || []);
             }
-        }),
-        []);
+        }, { atBegin: false }),
+    []);
 
     // Cleanup on unmount
     useEffect(() => {
+        // handleSearch('');
         return () => {
-            debouncedSearch.cancel();
+            debouncedSearch.cancel({ upcomingOnly: true });
         };
     }, [debouncedSearch]);
 
@@ -104,6 +104,7 @@ const SaleForm = () => {
     }
 
     const checkout = async () => {
+        devLogger.log("checkout function starting to works")
         try {
             setFormLoading(true);
 
@@ -328,7 +329,7 @@ const SaleForm = () => {
             <ConfirmDeleteDialog
                 open={open} 
                 onOpenChange={setOpen}
-                callback={method.handleSubmit(checkout)}       
+                callback={checkout}       
                 description="This action cannot be undone. This is not editable once you proceed."        
             />
         </div>

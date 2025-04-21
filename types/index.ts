@@ -14,3 +14,8 @@ export type ClientSale = Omit<Sale, 'total' | 'saleItems'> & {
         }
     }[]
 }
+
+export type revenueByMonthType = Array<{
+    name: string, 
+    value: string
+}>;

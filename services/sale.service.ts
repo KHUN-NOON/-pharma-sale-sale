@@ -2,7 +2,7 @@ import { createSaleDTO, getSaleDTO } from "@sale/zod";
 import { Sale } from "@/generated/prisma";
 import { PaginatedServiceResponse, ServiceResponseType } from "@/types/service.type";
 import { prisma } from "@/lib/prisma";
-import { ClientSale } from "@sale/types";
+import { ClientSale, revenueByMonthType } from "@sale/types";
 import { converSaleItemForClient } from "@sale/utils";
 
 export const getSales = async (params: getSaleDTO): Promise<PaginatedServiceResponse<ClientSale[]>> => {
@@ -10,9 +10,9 @@ export const getSales = async (params: getSaleDTO): Promise<PaginatedServiceResp
         const whereClause: any = {};
 
         if (params.startDate && params.endDate) {
-            whereClause.createdAt = {
-                gte: new Date(params.startDate),
-                lte: new Date(params.endDate)
+            whereClause.date = {
+                gte: new Date(`${params.startDate}T00:00:00Z`),
+                lte: new Date(`${params.endDate}T23:59:59.999Z`)
             }
         }
 
@@ -20,6 +20,7 @@ export const getSales = async (params: getSaleDTO): Promise<PaginatedServiceResp
 
         const [sales, total] = await Promise.all([
             prisma.sale.findMany({
+                where: whereClause,
                 include: {
                     saleItems: true
                 },
@@ -29,7 +30,9 @@ export const getSales = async (params: getSaleDTO): Promise<PaginatedServiceResp
                     createdAt: 'desc'
                 }
             }),
-            prisma.sale.count()
+            prisma.sale.count({
+                where: whereClause
+            })
         ]);
 
         return {
@@ -66,10 +69,12 @@ export const createSale = async (payload: createSaleDTO): Promise<ServiceRespons
         const sale = await prisma.$transaction(async (tx) => {
             for (const saleItem of saleItems) {
                 await tx.item.update({
-                  where: { id: saleItem.itemId },
-                  data: { stockQuantity: {
-                    increment: -saleItem.quantity
-                  }},
+                    where: { id: saleItem.itemId },
+                    data: {
+                        stockQuantity: {
+                            increment: -saleItem.quantity
+                        }
+                    },
                 });
             }
 
@@ -88,7 +93,7 @@ export const createSale = async (payload: createSaleDTO): Promise<ServiceRespons
                 include: {
                     saleItems: true
                 }
-            }); 
+            });
 
             return sale;
         });
@@ -106,7 +111,7 @@ export const createSale = async (payload: createSaleDTO): Promise<ServiceRespons
             message: "Sale created successfully",
             data: serialize
         }
-    } catch (error) {   
+    } catch (error) {
         return {
             success: false,
             message: error instanceof Error ? error.message : "Error creating sale",
@@ -247,7 +252,7 @@ export const updateSale = async (id: number, payload: createSaleDTO): Promise<Se
                     where: { id: item.itemId },
                     data: {
                         stockQuantity: {
-                        increment: -item.quantity, // subtract
+                            increment: -item.quantity, // subtract
                         },
                     },
                 });
@@ -289,6 +294,52 @@ export const updateSale = async (id: number, payload: createSaleDTO): Promise<Se
             success: true,
             message: "Sale updated successfully",
             data: serialize
+        }
+    } catch (error) {
+        return {
+            success: false,
+            message: error instanceof Error ? error.message : "Error updating sale",
+            data: null
+        };
+    }
+}
+
+export const revenueByMonth = async (year: number | string): Promise<ServiceResponseType<revenueByMonthType>> => {
+    try {
+        const monthlySales: { month: number; total: number }[] = await prisma.$queryRaw`
+            SELECT 
+                EXTRACT(MONTH from date) as MONTH,
+                SUM(total) as total
+            FROM "Sale"
+                WHERE EXTRACT(YEAR FROM date) = ${year}
+                GROUP BY EXTRACT(MONTH FROM date)
+                ORDER BY month 
+        `;
+
+        const monthNames = [
+            'January', 'February', 'March', 'April',
+            'May', 'June', 'July', 'August',
+            'September', 'October', 'November', 'December'
+        ];
+
+        // Initialize report with all months set to 0
+        const yearlyReport = monthNames.map(name => ({
+            name,
+            value: "0" // Start with string "0" as requested
+        }));
+
+        // Fill in the actual data from the query
+        monthlySales.forEach((sale: any) => {
+            const monthIndex = Number(sale.month) - 1;
+            if (monthIndex >= 0 && monthIndex < 12) {
+                yearlyReport[monthIndex].value = sale.total.toString();
+            }
+        });
+
+        return {
+            success: true,
+            message: "Yearly report success!",
+            data: yearlyReport
         }
     } catch (error) {
         return {

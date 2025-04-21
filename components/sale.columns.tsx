@@ -35,7 +35,7 @@ export const columns = ({edit, deleteItem}: columnProps): ColumnDef<ItemRow>[]  
             header: "Total",
             size: 100,
             cell({row}) {
-                return row.original.total.toFixed(2).toLocaleString();
+                return row.original.total.toLocaleString();
             }
         },
         {
